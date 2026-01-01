@@ -19,9 +19,9 @@ import random
 import string
 import time
 import os
+import json  # <--- Илова шуд: Барои кор бо файлҳо
 
 # ===================== CONFIG =====================
-# ✅ SECURITY NOTE:
 TOKEN = "8524676045:AAE7Eb_BDZKaB98-SHis2t4Pdrjgi-UodzY"
 ADMIN_IDS = [8436218638]
 
@@ -31,6 +31,7 @@ ADMIN_INSTAGRAM = "https://www.instagram.com/marzbontj?igsh=MW9yaG9lcm93YjRueA==
 FREE_UC_CHANNEL = "@marzbon_media"
 VISA_NUMBER = "4439200020432471"
 SBER_NUMBER = "2202208496090011"
+DB_FILE = "database.json"  # <--- Номи файли базаи маълумот
 
 ITEMS = {
     1: {"name": "60 UC", "price": 10},
@@ -288,24 +289,47 @@ def tr(uid: str, key: str, **kwargs) -> str:
 # ===================== ADMIN INFO =====================
 ADMIN_INFO_TJ = (
     """UCstore — ин боти расмии фурӯши UC барои PUBG Mobile...
-(Матни пурра нигоҳ дошта шуд)
 Инчунин дар бораи тамоми мушкилот шумо ҳамеша метавонед ба админ тамос гиред @MARZBON_TJ"""
 )
-# (Дигар забонҳо ба ҳамин тартиб кӯтоҳ карда шудаанд барои сарфаи ҷой, аммо дар коди аслӣ боқӣ мемонанд)
-# Шумо метавонед ҳамон матнҳои дарози пешинаро истифода баред, ман инҷо танҳо logic-ро нишон медиҳам.
-# Барои нусхабардорӣ аз коди пешинаатон матни пурраро гиред.
 
 def admin_info(uid: str) -> str:
-    lang = get_lang(uid)
-    # Дар инҷо ҳамон мантиқи пешина
-    return ADMIN_INFO_TJ 
+    return ADMIN_INFO_TJ
 
-# ===================== DATA (RAM ONLY) =====================
+# ===================== DATA (PERSISTENT) =====================
+# Ин тағйирёбандаҳо акнун аз файл пур мешаванд
 users_data = {}
 orders = []
 user_carts = {}
 user_wishlist = {}
 broadcast_draft = {}
+
+# ===================== DATABASE FUNCTIONS =====================
+def load_database():
+    """Маълумотро аз файл мехонад, агар файл бошад."""
+    global users_data, orders
+    if os.path.exists(DB_FILE):
+        try:
+            with open(DB_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                users_data = data.get("users", {})
+                orders = data.get("orders", [])
+                print(f"✅ Маълумот боргирӣ шуд: {len(users_data)} корбар.")
+        except Exception as e:
+            print(f"⚠️ Хатогӣ ҳангоми хондани база: {e}")
+    else:
+        print("ℹ️ Файли база нест. Нав сохта мешавад.")
+
+def save_database():
+    """Маълумотро ба файл сабт мекунад."""
+    data = {
+        "users": users_data,
+        "orders": orders
+    }
+    try:
+        with open(DB_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"⚠️ Хатогӣ ҳангоми сабт: {e}")
 
 # ===================== HELPERS =====================
 def is_admin(uid: int) -> bool:
@@ -350,6 +374,7 @@ def create_order(user_id: str, total: int, items: dict, game_id: str) -> dict:
         "type": "paid",
     }
     orders.append(o)
+    save_database() # <--- САБТ КАРДАН
     return o
 
 def find_order(order_id: int):
@@ -417,8 +442,10 @@ async def set_language_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "code": gen_code(),
             "lang": lang,
         }
+        save_database() # <--- САБТ КАРДАН (корбари нав)
     else:
         users_data[uid]["lang"] = lang
+        save_database() # <--- САБТ КАРДАН (тағйири забон)
 
     if context.user_data.get("awaiting_lang"):
         context.user_data["awaiting_lang"] = False
@@ -548,6 +575,9 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(int(inviter), "🎉 Барои даъват 2 UC гирифтед!")
             except Exception:
                 pass
+        
+        save_database() # <--- САБТ КАРДАН
+
         for admin in ADMIN_IDS:
             try:
                 await context.bot.send_message(admin, f"👤 Корбари нав!\n{u.first_name} | {phone}\n@{u.username}")
@@ -750,6 +780,7 @@ async def choose_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     order["status"] = "awaiting_proof"
     order["payment_method"] = "VISA" if method == "visa" else "SberBank"
+    save_database() # <--- САБТ
     card = VISA_NUMBER if method == "visa" else SBER_NUMBER
     context.user_data["awaiting_proof_order"] = order_id
     await q.message.reply_text(f"💳 {order['payment_method']}\n📌 Card: {card}\n\n{tr(uid,'receipt_send')}")
@@ -771,6 +802,7 @@ async def receive_proof(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else: return
     order["proof_file"] = file_id
     order["status"] = "proof_sent"
+    save_database() # <--- САБТ
     context.user_data.pop("awaiting_proof_order", None)
     items_txt = ""
     for item_id, qty in (order.get("items") or {}).items():
@@ -819,6 +851,9 @@ async def admin_pay_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order["status"] = "rejected"
         txt_user = f"❌ Order №{order_id} rejected. Please contact admin."
         txt_admin = f"❌ Rejected: №{order_id}"
+    
+    save_database() # <--- САБТ
+
     try: await context.bot.send_message(int(order["user_id"]), txt_user)
     except: pass
     await q.message.reply_text(txt_admin)
@@ -889,6 +924,9 @@ async def daily_uc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     roll = random.choices([1, 2, 3, 4, 5], weights=[60, 20, 10, 7, 3])[0]
     u["free_uc"] = u.get("free_uc", 0) + roll
     u["last_daily_uc"] = now_str()
+    
+    save_database() # <--- САБТ КАРДАН
+
     await msg.edit_text(f"🎁 Today: {roll} UC\n💰 Total: {u['free_uc']} UC\n\nCome back tomorrow!")
 
 async def my_uc(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -936,6 +974,9 @@ async def handle_free_claim_id(update: Update, context: ContextTypes.DEFAULT_TYP
         "time": now_str(),
     }
     orders.append(o)
+    
+    save_database() # <--- САБТ
+
     btn = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Confirm", callback_data=f"admin_free_confirm_{order_id}"),
         InlineKeyboardButton("❌ Reject", callback_data=f"admin_free_reject_{order_id}"),
@@ -971,6 +1012,9 @@ async def admin_free_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
         o["status"] = "rejected"
         msg_user = f"❌ FREE UC (#{order_id}) rejected. Contact admin."
         msg_admin = "❌ Rejected."
+    
+    save_database() # <--- САБТ
+
     try: await context.bot.send_message(int(o["user_id"]), msg_user)
     except: pass
     await q.message.reply_text(msg_admin)
@@ -1072,7 +1116,6 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👤 Users", callback_data="admin_users")],
         [InlineKeyboardButton("📦 Orders", callback_data="admin_orders")],
         [InlineKeyboardButton("📢 Broadcast", callback_data="bc_menu")],
-        # ✅ NEW: Gift Button
         [InlineKeyboardButton("🎁 Gift UC (Туҳфа)", callback_data="admin_gift_start")],
         [InlineKeyboardButton("🗑 Clear users", callback_data="admin_clear_confirm")],
     ])
@@ -1127,6 +1170,9 @@ async def admin_clear_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
     orders.clear()
     user_carts.clear()
     user_wishlist.clear()
+    
+    save_database() # <--- САБТ (База тоза шуд)
+
     await q.message.reply_text(f"🗑 Cleared: {n} users.")
 
 async def admin_clear_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1147,7 +1193,7 @@ async def admin_gift_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     if not is_admin(q.from_user.id): return
     
-    amount = int(q.data.split("_")[2]) # gift_amt_5 -> 5
+    amount = int(q.data.split("_")[2])
     context.user_data["gift_amount"] = amount
     context.user_data["awaiting_gift_reason"] = True
     
@@ -1209,7 +1255,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d["step"] = None
         return
 
-    # ✅ NEW: GIFT STEPS
+    # GIFT STEPS
     if context.user_data.get("awaiting_gift_id"):
         target_id = update.message.text.strip()
         if target_id not in users_data:
@@ -1233,10 +1279,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = context.user_data.get("gift_amount")
         
         if target_id in users_data and amount:
-            # Add UC
             users_data[target_id]["free_uc"] = users_data[target_id].get("free_uc", 0) + amount
+            save_database() # <--- САБТ КАРДАН (Туҳфа)
             
-            # Notify User
             try:
                 msg_to_user = (
                     f"🎁 Табрик! Шумо аз тарафи админ {amount} UC туҳфа гирифтед.\n"
@@ -1247,7 +1292,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text(f"⚠️ Хатогӣ ҳангоми фиристодан ба корбар: {e}")
             
-            # Notify Admin
             await update.message.reply_text(
                 f"✅ {amount} UC ба {users_data[target_id].get('name')} фиристода шуд!\n"
                 f"Сабаб: {reason}"
@@ -1255,7 +1299,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("⚠️ Хатогӣ. Маълумот гум шуд.")
 
-        # Clear state
         context.user_data["awaiting_gift_reason"] = False
         context.user_data["gift_target_id"] = None
         context.user_data["gift_amount"] = None
@@ -1332,7 +1375,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "admin_clear_do": await admin_clear_do(update, context); return
     if data == "admin_clear_no": await admin_clear_no(update, context); return
     
-    # ✅ NEW: Gift Handlers
+    # Gift Handlers
     if data == "admin_gift_start": await admin_gift_start(update, context); return
     if data.startswith("gift_amt_"): await admin_gift_amount(update, context); return
     if data == "admin_gift_cancel": 
@@ -1350,6 +1393,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     if not TOKEN or TOKEN == "PASTE_YOUR_TOKEN_HERE":
         print("⚠️ Please set your bot token in UCSTORE_BOT_TOKEN env var or in TOKEN variable.")
+    
+    # БОРГИРИИ БАЗАИ МАЪЛУМОТ ПЕШ АЗ ОҒОЗ
+    load_database()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -1362,7 +1409,7 @@ def main():
     app.add_handler(MessageHandler((filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND), receive_proof), group=1)
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_text), group=2)
 
-    print("✅ UCstore фаъол шуд )")
+    print("✅ UCstore бо database фаъол шуд )")
     app.run_polling()
 
 if __name__ == "__main__":
